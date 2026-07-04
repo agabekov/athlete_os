@@ -7,6 +7,8 @@ The app connects to the WHOOP API with your own WHOOP developer credentials,
 syncs your history into SQLite, and renders a fast dark dashboard. It is
 designed as a single-user self-hosted app: one deployment, one WHOOP account.
 
+![Dashboard screenshot](docs/assets/dashboard-screenshot.png)
+
 ## Features
 
 - Recovery hero with strain, HRV, resting heart rate, sleep, and 30-day deltas
