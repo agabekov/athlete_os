@@ -1,0 +1,15 @@
+services:
+  athlete-os:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      WHOOP_DB_PATH: /app/data/whoop.db
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - whoop-data:/app/data
+
+volumes:
+  whoop-data:

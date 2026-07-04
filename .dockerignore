@@ -1,0 +1,13 @@
+.git
+.next
+node_modules
+data
+.env*
+!.env.example
+*.log
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+.claude
+.remember
+.superpowers

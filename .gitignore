@@ -1,0 +1,11 @@
+node_modules/
+.next/
+data/
+.env*
+!.env.example
+*.tsbuildinfo
+next-env.d.ts
+
+# Brainstorming visual companion sessions
+.superpowers/
+docs/superpowers/

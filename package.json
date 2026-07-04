@@ -1,0 +1,42 @@
+{
+  "name": "athlete-os",
+  "version": "0.1.0",
+  "description": "Athlete OS: self-hosted WHOOP dashboard backed by local SQLite.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agabekov/athlete_os.git"
+  },
+  "bugs": {
+    "url": "https://github.com/agabekov/athlete_os/issues"
+  },
+  "homepage": "https://github.com/agabekov/athlete_os#readme",
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1",
+    "dev:public": "next dev -H 0.0.0.0",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "next": "^15.3.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "overrides": {
+    "postcss": "8.5.15",
+    "esbuild": "0.28.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.8",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4.1.8",
+    "typescript": "^5",
+    "vitest": "^3.2.0"
+  }
+}
