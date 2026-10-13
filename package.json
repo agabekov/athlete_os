@@ -12,31 +12,46 @@
   },
   "homepage": "https://github.com/agabekov/athlete_os#readme",
   "scripts": {
-    "dev": "next dev -H 127.0.0.1",
-    "dev:public": "next dev -H 0.0.0.0",
-    "build": "next build",
-    "start": "next start -H 0.0.0.0",
+    "dev": "tsx watch server/index.ts",
+    "dev:public": "HOST=0.0.0.0 tsx watch server/index.ts",
+    "build": "vite build && esbuild server/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server/index.js",
+    "start": "node dist/server/index.js",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "seed:demo": "node scripts/seed-demo.mjs"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=24.21.0 <25"
   },
   "dependencies": {
+    "@fontsource/chakra-petch": "^5.2.0",
+    "@fontsource/jetbrains-mono": "^5.2.0",
+    "@hono/node-server": "^2.1.5",
     "better-sqlite3": "^12.2.0",
-    "next": "^15.3.3",
+    "hono": "^4.13.13",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
-  "overrides": {
-    "postcss": "8.5.15",
-    "esbuild": "0.28.1"
-  },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.1.8",
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.56.0",
+    "@tailwindcss/vite": "^4.1.8",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^22",
+    "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.1.2",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "tailwindcss": "^4.1.8",
+    "tsx": "^4.23.15",
     "typescript": "^5",
-    "vitest": "^3.2.0"
+    "typescript-eslint": "^8.71.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
   }
 }

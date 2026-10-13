@@ -1,4 +1,5 @@
 export function YearHeatmap({ data }: { data: { date: string; recovery: number | null }[] }) {
+  if (!data.length) return <div className="surface p-6"><p className="font-mono text-xs text-muted">No recovery data yet</p></div>
   // pad so the grid starts on Monday
   const first = new Date(data[0].date + 'T00:00:00Z')
   const padding = (first.getUTCDay() + 6) % 7
@@ -25,6 +26,14 @@ export function YearHeatmap({ data }: { data: { date: string; recovery: number |
           ),
         )}
       </div>
+      <details className="mt-3 font-mono text-[10px] text-muted">
+        <summary className="cursor-pointer">Daily recovery values · {data[0].date}–{data[data.length - 1].date}</summary>
+        <table className="mt-2 w-full text-left">
+          <caption className="sr-only">Recovery by date; missing measurements are marked no data</caption>
+          <thead><tr><th scope="col">Date</th><th scope="col">Recovery</th></tr></thead>
+          <tbody>{data.map((day) => <tr key={day.date}><th scope="row" className="font-normal">{day.date}</th><td>{day.recovery == null ? 'No data' : `${Math.round(day.recovery)}%`}</td></tr>)}</tbody>
+        </table>
+      </details>
       <div className="mt-4 flex items-center gap-2 font-mono text-[10px] text-muted">
         <span>low</span>
         {[0.12, 0.34, 0.56, 0.78, 1].map((a) => (

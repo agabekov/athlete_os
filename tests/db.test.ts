@@ -2,16 +2,19 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import Database from 'better-sqlite3'
 import {
   createDb, getTokens, saveTokens, upsertCycle, upsertRecovery,
-  upsertSleep, upsertWorkout, saveProfile, getProfile,
+  upsertSleep, upsertWorkout, saveProfile, getProfile, assertAccountOwner, AccountMismatchError,
+  getLastSyncedAt, hasIncompleteSync, markSyncStarted, markSyncCompleted,
 } from '../lib/db'
+import type { WhoopCycle } from '../lib/whoop-types'
 
 const cycleRec = {
   id: 12345, start: '2026-06-10T21:00:00.000Z', end: '2026-06-11T21:00:00.000Z',
   timezone_offset: '+00:00', score_state: 'SCORED',
   score: { strain: 14.2, kilojoule: 9000, average_heart_rate: 72, max_heart_rate: 165 },
-}
+} satisfies WhoopCycle
 
 describe('db', () => {
   it('creates schema and stores tokens', () => {
@@ -38,7 +41,7 @@ describe('db', () => {
     const db = createDb(':memory:')
     upsertCycle(db, cycleRec)
     upsertCycle(db, { ...cycleRec, score: { ...cycleRec.score, strain: 15.0 } })
-    const rows = db.prepare('SELECT * FROM cycles').all() as any[]
+    const rows = db.prepare('SELECT * FROM cycles').all() as { strain: number; start_time: string; raw: string }[]
     expect(rows).toHaveLength(1)
     expect(rows[0].strain).toBe(15.0)
     expect(rows[0].start_time).toBe('2026-06-10T21:00:00.000Z')
@@ -48,7 +51,7 @@ describe('db', () => {
   it('stores NULL score columns for unscored records', () => {
     const db = createDb(':memory:')
     upsertCycle(db, { ...cycleRec, score_state: 'PENDING_SCORE', score: undefined })
-    const row = db.prepare('SELECT * FROM cycles').get() as any
+    const row = db.prepare('SELECT * FROM cycles').get() as { strain: number | null; score_state: string }
     expect(row.strain).toBeNull()
     expect(row.score_state).toBe('PENDING_SCORE')
   })
@@ -86,10 +89,58 @@ describe('db', () => {
           zone_three_milli: 1800000, zone_four_milli: 1000000, zone_five_milli: 140000 } },
     })
     saveProfile(db, { user_id: 1, email: 'x@y.z', first_name: 'Test', last_name: 'A' })
-    expect((db.prepare('SELECT hrv_rmssd_milli AS h FROM recoveries').get() as any).h).toBe(112.5)
-    expect((db.prepare('SELECT rem_ms FROM sleeps').get() as any).rem_ms).toBe(7000000)
-    expect((db.prepare('SELECT sleep_needed_ms FROM sleeps').get() as any).sleep_needed_ms).toBe(28500000)
-    expect((db.prepare('SELECT sport_name FROM workouts').get() as any).sport_name).toBe('running')
+    expect(db.prepare('SELECT hrv_rmssd_milli AS h FROM recoveries').get()).toEqual({ h: 112.5 })
+    expect(db.prepare('SELECT rem_ms FROM sleeps').get()).toEqual({ rem_ms: 7000000 })
+    expect(db.prepare('SELECT sleep_needed_ms FROM sleeps').get()).toEqual({ sleep_needed_ms: 28500000 })
+    expect(db.prepare('SELECT sport_name FROM workouts').get()).toEqual({ sport_name: 'running' })
     expect(getProfile(db)!.first_name).toBe('Test')
+  })
+
+  it('claims the existing legacy profile owner and rejects another account', () => {
+    const db = createDb(':memory:')
+    db.prepare('INSERT INTO profile (user_id,first_name) VALUES (7,?)').run('Owner')
+    assertAccountOwner(db, 7)
+    expect(db.prepare('SELECT user_id FROM account_owner').get()).toEqual({ user_id: 7 })
+    expect(() => assertAccountOwner(db, 8)).toThrow(AccountMismatchError)
+    expect(() => saveProfile(db, { user_id: 8, first_name: 'Other' })).toThrow(AccountMismatchError)
+    expect(getProfile(db)?.first_name).toBe('Owner')
+    db.close()
+  })
+
+  it('refuses legacy databases containing profiles for several accounts', () => {
+    const db = createDb(':memory:')
+    db.prepare('INSERT INTO profile (user_id) VALUES (?)').run(7)
+    db.prepare('INSERT INTO profile (user_id) VALUES (?)').run(8)
+    expect(() => assertAccountOwner(db, 7)).toThrow(AccountMismatchError)
+    expect(db.prepare('SELECT user_id FROM account_owner').all()).toEqual([])
+    db.close()
+  })
+
+  it('migrates legacy sync state without trusting partial-page dates and persists incomplete status', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whoop-migration-test-'))
+    const file = path.join(dir, 'whoop.db')
+    const legacy = new Database(file)
+    legacy.exec('CREATE TABLE sync_state (resource TEXT PRIMARY KEY, last_synced_at TEXT NOT NULL)')
+    legacy.prepare('INSERT INTO sync_state VALUES (?,?)').run('cycles', '2026-06-01T00:00:00.000Z')
+    legacy.close()
+    let db = createDb(file)
+    try {
+      expect(db.prepare('SELECT * FROM sync_state').get()).toEqual({
+        resource: 'cycles', last_synced_at: '2026-06-01T00:00:00.000Z',
+        committed_watermark: null, watermark_initialized: 0,
+      })
+      expect(getLastSyncedAt(db)).toBeNull()
+      markSyncCompleted(db, '2026-06-02T00:00:00.000Z')
+      markSyncStarted(db)
+      db.close()
+      db = createDb(file)
+      expect(getLastSyncedAt(db)).toBe('2026-06-02T00:00:00.000Z')
+      expect(hasIncompleteSync(db)).toBe(true)
+      markSyncCompleted(db, '2026-06-03T00:00:00.000Z')
+      expect(hasIncompleteSync(db)).toBe(false)
+    } finally {
+      db.close()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

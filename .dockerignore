@@ -1,5 +1,9 @@
 .git
 .next
+dist
+test-results
+playwright-report
+.playwright-cli
 node_modules
 data
 .env*

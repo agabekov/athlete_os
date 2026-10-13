@@ -8,7 +8,7 @@ export function EmptyState() {
         <h1 className="font-display text-4xl font-bold text-balance sm:text-5xl">Let&apos;s pull your history.</h1>
         <p className="max-w-md text-pretty text-sm text-muted">
           First sync fetches everything WHOOP has on you, 25 records at a time.
-          Depending on account age this can take a few minutes. Leave the tab open.
+          Depending on account age this can take a few minutes. Sync continues on the server if you close this tab.
         </p>
         <SyncButton label="Run first sync" />
       </section>

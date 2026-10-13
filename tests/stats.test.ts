@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { createDb, upsertCycle, upsertRecovery, upsertSleep, upsertWorkout } from '../lib/db'
-import { localDate, getDailySeries, rollingAvg, getRecords, getWeekdayPattern, getWorkoutTotals } from '../lib/stats'
+import { localDate, getDailySeries, rollingAvg, averages, calendarWindow, getLatestSnapshot, getHeatmap, getRecords, getWeekdayPattern, getWorkoutTotals, getSleepAverages, getRecentSleeps, getRecentWorkouts } from '../lib/stats'
 import { fmtMs, fmtHours, fmtCompact } from '../lib/format'
+import { splitPointSegments } from '../components/chart-path'
 
 function seed(db: ReturnType<typeof createDb>) {
   // Two days: Jun 10 and Jun 11 local (+05:00)
@@ -42,6 +43,60 @@ describe('stats', () => {
 
   it('rollingAvg averages over trailing window, skipping nulls', () => {
     expect(rollingAvg([10, 20, null, 30], 2)).toEqual([10, 15, 20, 30])
+  })
+
+  it('calendar gaps stay unknown and do not widen 30-day or 7-day windows', () => {
+    const db = createDb(':memory:')
+    seed(db)
+    db.prepare('UPDATE cycles SET start_time=? WHERE id=2').run('2026-07-19T19:00:00.000Z')
+    const series = getDailySeries(db)
+    expect(series).toHaveLength(41)
+    expect(series[1]).toMatchObject({ date: '2026-06-11', recovery: null, sleepMs: null })
+    expect(calendarWindow(series, 30)).toHaveLength(30)
+    expect(calendarWindow(series, 30)[0].date).toBe('2026-06-21')
+    expect(averages(series, 30).recovery).toBe(87)
+    const smoothed = rollingAvg(series.map((day) => day.recovery), 7)
+    expect(smoothed[6]).toBe(60)
+    expect(smoothed[7]).toBeNull()
+    expect(smoothed.at(-1)).toBe(87)
+    db.close()
+  })
+
+  it('latest snapshot preserves its real historical date and handles empty data', () => {
+    const db = createDb(':memory:')
+    expect(getLatestSnapshot(getDailySeries(db))).toBeNull()
+    seed(db)
+    const series = getDailySeries(db)
+    expect(getLatestSnapshot(series)?.date).toBe('2026-06-11')
+    const heatmap = getHeatmap(db, series)
+    expect(heatmap).toHaveLength(365)
+    expect(heatmap.at(-1)).toMatchObject({ date: '2026-06-11', recovery: 87 })
+    db.close()
+  })
+
+  it('chart paths split at missing measurements, retaining isolated points', () => {
+    const a = { x: 0, y: 10 }, b = { x: 2, y: 30 }, c = { x: 3, y: 20 }
+    expect(splitPointSegments([null, a, null, b, c, null])).toEqual([[a], [b, c]])
+    expect(splitPointSegments([null, null])).toEqual([])
+  })
+
+  it('sleep averages use calendar days and nights use wake-up dates', () => {
+    const db = createDb(':memory:')
+    seed(db)
+    expect(getRecentSleeps(db).map((sleep) => sleep.date)).toEqual(['2026-06-10', '2026-06-11'])
+    expect(getSleepAverages(db, 1, '2026-06-11').avgSleepMs).toBe(27000000)
+    expect(getSleepAverages(db, 30, '2026-07-20')).toEqual({ avgSleepMs: null, avgEfficiency: null, avgConsistency: null, avgRespRate: null })
+    db.close()
+  })
+
+  it('missing record values and malformed optional zones do not hide valid data', () => {
+    const db = createDb(':memory:')
+    seed(db)
+    db.prepare('UPDATE recoveries SET resting_heart_rate=NULL WHERE cycle_id=1').run()
+    expect(getRecords(db).lowestRhr).toMatchObject({ value: 48, date: '2026-06-11' })
+    db.prepare('UPDATE workouts SET zone_durations=? WHERE id=?').run('{broken', 'w1')
+    expect(getRecentWorkouts(db)[0].zones).toBeNull()
+    db.close()
   })
 
   it('getRecords finds personal bests with dates', () => {
@@ -94,7 +149,7 @@ describe('stats', () => {
 
 describe('getWorkoutTotals', () => {
   function seedWorkouts(db: ReturnType<typeof createDb>) {
-    // span: May 1 → May 29 = exactly 4 weeks; 3 scored workouts → 0.75/week
+    // Inclusive observed dates May 1 → May 29 = 29 days.
     upsertWorkout(db, { id: 'wt1', start: '2026-05-01T10:00:00.000Z', end: '2026-05-01T11:00:00.000Z', timezone_offset: '+05:00', sport_name: 'running', score_state: 'SCORED', score: { strain: 10, average_heart_rate: 150, max_heart_rate: 178, kilojoule: 2092, distance_meter: 5000, altitude_gain_meter: 50, zone_durations: { zone_zero_milli: 0, zone_one_milli: 0, zone_two_milli: 3600000, zone_three_milli: 0, zone_four_milli: 0, zone_five_milli: 0 } } })
     upsertWorkout(db, { id: 'wt2', start: '2026-05-15T10:00:00.000Z', end: '2026-05-15T10:30:00.000Z', timezone_offset: '+05:00', sport_name: 'walking', score_state: 'SCORED', score: { strain: 5, average_heart_rate: 110, max_heart_rate: 130, kilojoule: 1046 } })
     upsertWorkout(db, { id: 'wt3', start: '2026-05-29T10:00:00.000Z', end: null, timezone_offset: '+05:00', sport_name: 'swimming', score_state: 'SCORED', score: { strain: 7, average_heart_rate: 120, max_heart_rate: 150 } })
@@ -111,13 +166,16 @@ describe('getWorkoutTotals', () => {
     expect(t.totalKcal).toBeCloseTo(750, 0)    // (2092 + 1046) kJ / 4.184
     expect(t.totalKm).toBeCloseTo(5, 3)        // only wt1 has distance
     expect(t.totalElevationM).toBe(50)
-    expect(t.perWeek).toBeCloseTo(0.75, 2)     // 3 workouts / 4 weeks
+    expect(t.perWeek).toBeCloseTo(3 * 7 / 29, 3)
+    expect(t.observationStart).toBe('2026-05-01')
+    expect(t.observationEnd).toBe('2026-05-29')
   })
 
   it('returns zeros/nulls on an empty db', () => {
     const db = createDb(':memory:')
     expect(getWorkoutTotals(db)).toEqual({
       count: 0, totalMs: 0, totalKcal: null, totalKm: null, totalElevationM: null, perWeek: 0,
+      observationStart: null, observationEnd: null,
     })
   })
 
@@ -125,5 +183,16 @@ describe('getWorkoutTotals', () => {
     const db = createDb(':memory:')
     upsertWorkout(db, { id: 'wt5', start: '2026-05-01T10:00:00.000Z', end: '2026-05-01T11:00:00.000Z', timezone_offset: '+05:00', sport_name: 'running', score_state: 'SCORED', score: { strain: 10, average_heart_rate: 150, max_heart_rate: 178, kilojoule: 1000 } })
     expect(getWorkoutTotals(db).perWeek).toBe(1)
+  })
+
+  it('workout frequency includes observed rest days after the final workout', () => {
+    const db = createDb(':memory:')
+    seedWorkouts(db)
+    upsertCycle(db, { id: 9, start: '2026-06-09T19:00:00.000Z', end: null, timezone_offset: '+05:00', score_state: 'PENDING_SCORE' })
+    const totals = getWorkoutTotals(db, getDailySeries(db))
+    expect(totals.observationStart).toBe('2026-05-01')
+    expect(totals.observationEnd).toBe('2026-06-10')
+    expect(totals.perWeek).toBeCloseTo(3 * 7 / 41, 3)
+    db.close()
   })
 })

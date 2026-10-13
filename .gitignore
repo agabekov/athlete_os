@@ -1,5 +1,9 @@
 node_modules/
 .next/
+dist/
+playwright-report/
+test-results/
+.playwright-cli/
 data/
 .env*
 !.env.example

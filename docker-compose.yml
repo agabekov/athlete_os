@@ -7,7 +7,7 @@ services:
     environment:
       WHOOP_DB_PATH: /app/data/whoop.db
     ports:
-      - "${PORT:-3000}:3000"
+      - "127.0.0.1:${PORT:-3000}:3000"
     volumes:
       - whoop-data:/app/data
 

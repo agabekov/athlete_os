@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { rollingAvg, type DayRow } from '@/lib/stats'
+import { calendarWindow, rollingAvg, type DayRow, type MetricKey } from '@/lib/stats'
 import { TrendChart } from './TrendChart'
 
 const RANGES = [
@@ -14,15 +14,16 @@ const RANGES = [
 export function ChartsPanel({ series }: { series: DayRow[] }) {
   const [range, setRange] = useState<(typeof RANGES)[number][0]>('90D')
   const days = RANGES.find(([k]) => k === range)![1]
-  const from = days === Infinity ? 0 : Math.max(0, series.length - days)
-  const pick = (key: keyof DayRow) => series.slice(from).map((d) => ({ date: d.date, value: d[key] as number | null }))
+  const visible = calendarWindow(series, days)
+  const from = series.length - visible.length
+  const pick = (key: MetricKey) => visible.map((d) => ({ date: d.date, value: d[key] }))
   // 7-day rolling average computed over the FULL series before slicing, so the
   // first visible days still have proper trailing windows
-  const pickAvg = (key: keyof DayRow, scale = 1) => {
-    const avg = rollingAvg(series.map((d) => d[key] as number | null), 7)
+  const pickAvg = (key: MetricKey, scale = 1) => {
+    const avg = rollingAvg(series.map((d) => d[key]), 7)
     return series.map((d, i) => ({ date: d.date, value: avg[i] != null ? avg[i]! * scale : null })).slice(from)
   }
-  const sleepHours = series.slice(from).map((d) => ({ date: d.date, value: d.sleepMs != null ? d.sleepMs / 3600000 : null }))
+  const sleepHours = visible.map((d) => ({ date: d.date, value: d.sleepMs != null ? d.sleepMs / 3600000 : null }))
 
   return (
     <div>
@@ -30,6 +31,8 @@ export function ChartsPanel({ series }: { series: DayRow[] }) {
         {RANGES.map(([key]) => (
           <button
             key={key}
+            type="button"
+            aria-pressed={range === key}
             onClick={() => setRange(key)}
             className={`pressable rounded-full px-4 py-2 font-mono text-[11px] tracking-[0.2em] transition-[scale,color,background-color,box-shadow] ${
               range === key

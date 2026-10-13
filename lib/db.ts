@@ -1,6 +1,9 @@
 import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
+import type {
+  WhoopProfile, WhoopBodyMeasurement, WhoopCycle, WhoopRecovery, WhoopSleep, WhoopWorkout,
+} from './whoop-types'
 
 export type DB = Database.Database
 
@@ -48,7 +51,18 @@ CREATE TABLE IF NOT EXISTS workouts (
 );
 CREATE TABLE IF NOT EXISTS sync_state (
   resource TEXT PRIMARY KEY,
-  last_synced_at TEXT NOT NULL
+  last_synced_at TEXT NOT NULL,
+  committed_watermark TEXT,
+  watermark_initialized INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS account_owner (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  user_id INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sync_status (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  last_completed_at TEXT,
+  incomplete INTEGER NOT NULL DEFAULT 0
 );
 `
 
@@ -80,20 +94,35 @@ function secureDbFiles(file: string): void {
 export function createDb(file: string): DB {
   if (file !== ':memory:') prepareDbPath(file)
   const db = new Database(file)
-  db.pragma('journal_mode = WAL')
-  if (file !== ':memory:') secureDbFiles(file)
-  db.exec(SCHEMA)
-  // migration for DBs created before sleeps.cycle_id existed
-  const sleepCols = db.prepare(`SELECT name FROM pragma_table_info('sleeps')`).all() as { name: string }[]
-  if (!sleepCols.some((c) => c.name === 'cycle_id')) {
-    db.exec(`ALTER TABLE sleeps ADD COLUMN cycle_id INTEGER`)
-    db.exec(`UPDATE sleeps SET cycle_id = json_extract(raw, '$.cycle_id')`)
+  try {
+    db.pragma('journal_mode = WAL')
+    if (file !== ':memory:') secureDbFiles(file)
+    db.transaction(() => {
+      db.exec(SCHEMA)
+      const sleepCols = db.prepare(`SELECT name FROM pragma_table_info('sleeps')`).all() as { name: string }[]
+      if (!sleepCols.some((c) => c.name === 'cycle_id')) {
+        db.exec(`ALTER TABLE sleeps ADD COLUMN cycle_id INTEGER`)
+        db.exec(`UPDATE sleeps SET cycle_id = json_extract(raw, '$.cycle_id')`)
+      }
+      const syncCols = db.prepare(`SELECT name FROM pragma_table_info('sync_state')`).all() as { name: string }[]
+      if (!syncCols.some((c) => c.name === 'committed_watermark')) {
+        db.exec(`ALTER TABLE sync_state ADD COLUMN committed_watermark TEXT`)
+      }
+      if (!syncCols.some((c) => c.name === 'watermark_initialized')) {
+        // Legacy timestamps cannot prove that their MAX(start_time) came from a
+        // completed pagination. Re-fetch each resource fully once after upgrade.
+        db.exec(`ALTER TABLE sync_state ADD COLUMN watermark_initialized INTEGER NOT NULL DEFAULT 0`)
+      }
+    })()
+    if (file !== ':memory:') secureDbFiles(file)
+    return db
+  } catch (error) {
+    db.close()
+    throw error
   }
-  if (file !== ':memory:') secureDbFiles(file)
-  return db
 }
 
-// Survive Next.js dev hot-reload without leaking connections.
+// Keep one connection through development module reloads.
 const g = globalThis as unknown as { __whoopDb?: DB }
 
 export function getDb(): DB {
@@ -124,25 +153,51 @@ export function clearTokens(db: DB): void {
   db.prepare('DELETE FROM tokens').run()
 }
 
-export function saveProfile(db: DB, p: any): void {
+export class AccountMismatchError extends Error {
+  constructor() {
+    super('This database belongs to a different WHOOP account. Connect its owner or use a new database.')
+    this.name = 'AccountMismatchError'
+  }
+}
+
+export function assertAccountOwner(db: DB, userId: number): void {
+  db.transaction(() => {
+    const owner = db.prepare('SELECT user_id FROM account_owner WHERE id = 1').get() as { user_id: number } | undefined
+    const profiles = db.prepare('SELECT user_id FROM profile').all() as { user_id: number }[]
+    if ((owner && owner.user_id !== userId) || profiles.some((p) => p.user_id !== userId)) {
+      throw new AccountMismatchError()
+    }
+    db.prepare('INSERT OR IGNORE INTO account_owner (id, user_id) VALUES (1, ?)').run(userId)
+  })()
+}
+
+export interface ProfileRow {
+  user_id: number
+  email: string | null
+  first_name: string | null
+  last_name: string | null
+}
+
+export function saveProfile(db: DB, p: WhoopProfile): void {
+  assertAccountOwner(db, p.user_id)
   db.prepare(`INSERT INTO profile (user_id, email, first_name, last_name)
     VALUES (@user_id, @email, @first_name, @last_name)
     ON CONFLICT(user_id) DO UPDATE SET email=@email, first_name=@first_name, last_name=@last_name`)
     .run({ user_id: p.user_id, email: p.email ?? null, first_name: p.first_name ?? null, last_name: p.last_name ?? null })
 }
 
-export function getProfile(db: DB): { user_id: number; email: string | null; first_name: string | null; last_name: string | null } | null {
-  return (db.prepare('SELECT * FROM profile LIMIT 1').get() as any) ?? null
+export function getProfile(db: DB): ProfileRow | null {
+  return (db.prepare('SELECT user_id, email, first_name, last_name FROM profile LIMIT 1').get() as ProfileRow | undefined) ?? null
 }
 
-export function saveBodyMeasurement(db: DB, b: any): void {
+export function saveBodyMeasurement(db: DB, b: WhoopBodyMeasurement): void {
   db.prepare(`INSERT INTO body_measurement (id, height_meter, weight_kilogram, max_heart_rate)
     VALUES (1, @h, @w, @m)
     ON CONFLICT(id) DO UPDATE SET height_meter=@h, weight_kilogram=@w, max_heart_rate=@m`)
     .run({ h: b.height_meter ?? null, w: b.weight_kilogram ?? null, m: b.max_heart_rate ?? null })
 }
 
-export function upsertCycle(db: DB, rec: any): void {
+export function upsertCycle(db: DB, rec: WhoopCycle): void {
   const s = rec.score_state === 'SCORED' ? rec.score : null
   db.prepare(`INSERT INTO cycles (id, start_time, end_time, timezone_offset, score_state, strain, kilojoule, avg_heart_rate, max_heart_rate, raw)
     VALUES (@id, @st, @et, @tz, @state, @strain, @kj, @ahr, @mhr, @raw)
@@ -155,7 +210,7 @@ export function upsertCycle(db: DB, rec: any): void {
     })
 }
 
-export function upsertRecovery(db: DB, rec: any): void {
+export function upsertRecovery(db: DB, rec: WhoopRecovery): void {
   const s = rec.score_state === 'SCORED' ? rec.score : null
   db.prepare(`INSERT INTO recoveries (cycle_id, sleep_id, score_state, user_calibrating, recovery_score, resting_heart_rate, hrv_rmssd_milli, spo2_percentage, skin_temp_celsius, raw)
     VALUES (@cid, @sid, @state, @cal, @score, @rhr, @hrv, @spo2, @temp, @raw)
@@ -169,7 +224,7 @@ export function upsertRecovery(db: DB, rec: any): void {
     })
 }
 
-export function upsertSleep(db: DB, rec: any): void {
+export function upsertSleep(db: DB, rec: WhoopSleep): void {
   const s = rec.score_state === 'SCORED' ? rec.score : null
   const st = s?.stage_summary
   const need = s?.sleep_needed
@@ -194,7 +249,7 @@ export function upsertSleep(db: DB, rec: any): void {
     })
 }
 
-export function upsertWorkout(db: DB, rec: any): void {
+export function upsertWorkout(db: DB, rec: WhoopWorkout): void {
   const s = rec.score_state === 'SCORED' ? rec.score : null
   db.prepare(`INSERT INTO workouts (id, start_time, end_time, timezone_offset, sport_name, score_state, strain, avg_heart_rate, max_heart_rate, kilojoule, distance_meter, altitude_gain_meter, zone_durations, raw)
     VALUES (@id, @st, @et, @tz, @sport, @state, @strain, @ahr, @mhr, @kj, @dist, @alt, @zones, @raw)
@@ -209,12 +264,29 @@ export function upsertWorkout(db: DB, rec: any): void {
     })
 }
 
-export function setSyncState(db: DB, resource: string, at: string): void {
-  db.prepare(`INSERT INTO sync_state (resource, last_synced_at) VALUES (@resource, @at)
-    ON CONFLICT(resource) DO UPDATE SET last_synced_at=@at`).run({ resource, at })
+export function setSyncState(db: DB, resource: string, at: string, watermark: string | null): void {
+  db.prepare(`INSERT INTO sync_state (resource, last_synced_at, committed_watermark, watermark_initialized)
+    VALUES (@resource, @at, @watermark, 1)
+    ON CONFLICT(resource) DO UPDATE SET last_synced_at=@at, committed_watermark=@watermark, watermark_initialized=1`)
+    .run({ resource, at, watermark })
+}
+
+export function markSyncStarted(db: DB): void {
+  db.prepare(`INSERT INTO sync_status (id, incomplete) VALUES (1, 1)
+    ON CONFLICT(id) DO UPDATE SET incomplete=1`).run()
+}
+
+export function markSyncCompleted(db: DB, at: string): void {
+  db.prepare(`INSERT INTO sync_status (id, last_completed_at, incomplete) VALUES (1, ?, 0)
+    ON CONFLICT(id) DO UPDATE SET last_completed_at=excluded.last_completed_at, incomplete=0`).run(at)
+}
+
+export function hasIncompleteSync(db: DB): boolean {
+  const row = db.prepare('SELECT incomplete FROM sync_status WHERE id = 1').get() as { incomplete: number } | undefined
+  return row?.incomplete === 1
 }
 
 export function getLastSyncedAt(db: DB): string | null {
-  const row = db.prepare('SELECT MAX(last_synced_at) AS m FROM sync_state').get() as { m: string | null }
-  return row.m
+  const row = db.prepare('SELECT last_completed_at FROM sync_status WHERE id = 1').get() as { last_completed_at: string | null } | undefined
+  return row?.last_completed_at ?? null
 }

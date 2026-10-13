@@ -44,10 +44,18 @@ p, li {
 }
 
 :root {
+  --font-disp: 'Chakra Petch', sans-serif;
+  --font-jbm: 'JetBrains Mono', monospace;
   --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.08);
   --shadow-border-hover: 0 0 0 1px rgba(255, 255, 255, 0.14);
   --shadow-glow: 0 24px 70px rgba(0, 0, 0, 0.34);
   --shadow-accent: 0 0 36px rgba(46, 232, 108, 0.12);
+}
+
+:focus-visible { outline: 2px solid var(--color-rec-high); outline-offset: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition-duration: 0s !important; }
 }
 
 /* film-grain overlay for depth on the near-black canvas */

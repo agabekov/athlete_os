@@ -11,7 +11,7 @@ function Delta({ value, avg, invert = false }: { value: number | null; avg: numb
   const good = invert ? diff < 0 : diff > 0
   const sign = diff > 0 ? '+' : ''
   return (
-    <span className={`font-mono text-xs ${good ? 'text-rec-high' : 'text-rec-low'}`}>
+    <span className={`font-mono text-xs ${diff === 0 ? 'text-muted' : good ? 'text-rec-high' : 'text-rec-low'}`}>
       {sign}{diff.toFixed(1)} vs 30d
     </span>
   )

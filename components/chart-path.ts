@@ -1,5 +1,20 @@
 export interface Pt { x: number; y: number }
 
+/** Keep unknown measurements as breaks instead of interpolating across them. */
+export function splitPointSegments(points: (Pt | null)[]): Pt[][] {
+  const segments: Pt[][] = []
+  let current: Pt[] = []
+  for (const point of points) {
+    if (point) current.push(point)
+    else if (current.length) {
+      segments.push(current)
+      current = []
+    }
+  }
+  if (current.length) segments.push(current)
+  return segments
+}
+
 export function buildLinePath(pts: Pt[]): string {
   if (pts.length === 0) return ''
   if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`

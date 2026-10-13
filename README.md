@@ -3,8 +3,9 @@
 Self-hosted WHOOP dashboard for people who want their recovery, sleep, strain,
 and workout history on their own computer or VPS.
 
-The app connects to the WHOOP API with your own WHOOP developer credentials,
-syncs your history into SQLite, and renders a fast dark dashboard. It is
+The app uses React + Vite for the interface and Hono on Node.js for OAuth,
+background synchronization, and serving the built frontend. It connects to the
+WHOOP API with your own developer credentials and stores your history in SQLite. It is
 designed as a single-user self-hosted app: one deployment, one WHOOP account.
 
 ![Dashboard screenshot](docs/assets/dashboard-screenshot.png)
@@ -21,7 +22,7 @@ designed as a single-user self-hosted app: one deployment, one WHOOP account.
 
 ## Requirements
 
-- Node.js 22+ for local development
+- Node.js 24.21.0 LTS (`.nvmrc`, `.node-version`, Docker and CI use this version)
 - Docker + Docker Compose for containerized self-hosting
 - A WHOOP account
 - A WHOOP developer app for your own deployment
@@ -45,7 +46,9 @@ Do not commit or share your Client Secret.
 ```bash
 git clone https://github.com/agabekov/athlete_os.git
 cd athlete_os
-npm install
+nvm install # or install Node 24.21.0 with your preferred version manager
+nvm use
+npm ci
 cp .env.example .env.local
 ```
 
@@ -93,7 +96,8 @@ Start:
 docker compose up -d --build
 ```
 
-The container listens on port `3000` by default. Change the host port with:
+The container listens on port `3000`; Compose publishes it only on `127.0.0.1`,
+so external traffic goes through your reverse proxy and its access controls. Change the host port with:
 
 ```env
 PORT=8080
@@ -145,25 +149,67 @@ between runs:
   the app in WHOOP, reconnect once.
 
 Visiting `/api/auth/login` while already connected redirects back to the
-dashboard instead of starting a new WHOOP authorization flow.
+dashboard instead of starting a new WHOOP authorization flow. A database is bound
+to one WHOOP user ID. Reconnecting another account is rejected without deleting
+any history; use a separate `WHOOP_DB_PATH` for another account.
 
 ## Development
 
 ```bash
 npm test
 npm run typecheck
+npm run lint
 npm run build
 npm audit
+npx playwright install chromium
+npm run test:e2e
 ```
 
 Seed fake data for UI work:
 
 ```bash
-node scripts/seed-demo.mjs
+npm run seed:demo
+WHOOP_DB_PATH=data/whoop-demo.db npm run dev
 ```
 
-The seed script writes `data/whoop.db`; delete `data/whoop.db*` before using a
-real account again.
+The seed script writes a separate `data/whoop-demo.db` and refuses to overwrite
+an occupied database or the real default path. Set WHOOP developer credentials
+in `.env.local` to pass the setup screen; seeded demo tokens are fake, so use
+demo data for interface work only. Do not run sync against the demo database.
+To regenerate demo data, choose a new empty path with `WHOOP_DB_PATH`.
+
+Build and run production locally:
+
+```bash
+npm run build
+WHOOP_CLIENT_ID=your_client_id WHOOP_CLIENT_SECRET=your_client_secret npm start
+```
+
+Production reads environment variables supplied by the process or Docker; it
+does not load local environment files. `HOST` defaults to `127.0.0.1`, and `PORT`
+defaults to `3000`. Development loads `.env.local`, then `.env`, while preserving
+already supplied environment variables.
+
+## Synchronization and upgrades
+
+The Sync button starts a background job and polls its status. Closing a browser
+tab does not cancel the job. Concurrent sync requests share the same operation.
+Requests have a 20-second deadline and each WHOOP client has a 15-minute total
+budget. Interrupted jobs can be retried without advancing an unfinished resource
+checkpoint. The header reports the latest measurement date, the last fully
+completed sync, and incomplete sync status.
+
+Run one server process per database. A process restart stops a running job; its
+incomplete state is retained, and the next Sync resumes safely. On upgrade from
+the previous schema, the first sync reloads all resources once to establish
+reliable checkpoints. Existing history and credentials are preserved. Back up
+your database before upgrading.
+
+The dashboard uses calendar-day ranges and keeps missing measurements as gaps.
+Workout frequency is labeled with its observed calendar interval, including rest
+days. Fonts are bundled locally; the browser does not fetch them from Google.
+
+See [AGENTS.md](AGENTS.md) for module boundaries and verification guidance.
 
 ## License
 

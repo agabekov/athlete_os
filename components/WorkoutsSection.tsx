@@ -57,6 +57,9 @@ export function WorkoutsSection({ sports, recent, totals }: {
             <TotalTile value={fmtCompact(totals.totalElevationM)} label="m elevation" />
             <TotalTile value={totals.perWeek > 0 ? `${fmtNum(totals.perWeek, 1)}×` : '—'} label="per week" />
           </div>
+          {totals.observationStart && totals.observationEnd && <p className="mt-3 font-mono text-[10px] text-muted">
+            Frequency over {fmtDate(totals.observationStart)}–{fmtDate(totals.observationEnd)}
+          </p>}
         </div>
       </div>
       <div className="surface p-6 lg:col-span-2">

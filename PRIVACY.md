@@ -1,6 +1,6 @@
 # Privacy Policy — Athlete OS
 
-**Last updated: 4 July 2026**
+**Last updated: 13 October 2026**
 
 ## Overview
 
